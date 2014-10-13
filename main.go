@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"github.com/PuerkitoBio/goquery"
 	"os"
 	"sort"
 	"strings"
@@ -27,7 +28,7 @@ func (t SuffixTexts) Less(i, j int) bool {
 }
 
 type Page struct {
-	Path string
+	Url  string
 	Size int
 }
 
@@ -108,42 +109,72 @@ func read_file(path string) (string, error) {
 	return html, nil
 }
 
-func load_content(files []string) ([]Page, string, error) {
+func load_content(docs map[string]*goquery.Document) ([]Page, string, error) {
 	var content = ""
 	var info []Page
 
-	for i := 0; i < len(files); i++ {
-		file := files[i]
-		html, _ := read_file(file)
-		content += html + "\000"
-		info = append(info, Page{Path: file, Size: len(html)})
+	for url, doc := range docs {
+		str, _ := doc.Html()
+		content += str + "\000"
+		info = append(info, Page{Url: url, Size: len(str)})
 	}
 
 	return info, content, nil
 }
 
+func get_url(doc *goquery.Document) []string {
+	var urls []string
+	uniq := make(map[string]bool)
+
+	doc.Find("a").Each(func(_ int, s *goquery.Selection) {
+		url, _ := s.Attr("href")
+		if url != "" {
+			if strings.Index(url, "http") != 0 && strings.Index(url, "#") == -1 {
+				uniq[url] = true
+			}
+		}
+	})
+
+	for key, _ := range uniq {
+		urls = append(urls, key)
+	}
+
+	return urls
+}
+
+func scraping(base_url string, path string, cache map[string]*goquery.Document) map[string]*goquery.Document {
+	url := base_url + "/" + path
+	doc, _ := goquery.NewDocument(url)
+	urls := get_url(doc)
+	cache[url] = doc
+
+	for i := 0; i < len(urls); i++ {
+		if cache[base_url+"/"+urls[i]] == nil {
+			cache = scraping(base_url, urls[i], cache)
+		}
+	}
+
+	return cache
+}
+
 func main() {
-	var files []string
 	var info []Page
 	var pos []int
-	var search_text = "search"
+	var cache = make(map[string]*goquery.Document)
+	var search_text = "Java"
+	base_url := "http://www.osss.cs.tsukuba.ac.jp/kato/codeconv"
+	start_path := "CodeConvTOC.doc.html"
 
-	if len(os.Args) < 2 {
-		panic("Error!")
-	}
+	cache = scraping(base_url, start_path, cache)
 
-	for i := 1; i < len(os.Args); i++ {
-		files = append(files, os.Args[i])
-	}
-
-	info, content, _ := load_content(files)
+	info, content, _ := load_content(cache)
 
 	pos = search_sub_string(content, search_text)
 	for i := 0; i < len(pos); i++ {
 		var cur = 0
 		for j := 0; j < len(info); j++ {
 			if pos[i] < cur+info[j].Size {
-				fmt.Printf("%s:%d\n", info[j].Path, pos[i])
+				fmt.Printf("%s:%d\n", info[j].Url, pos[i])
 				break
 			}
 			cur += info[j].Size
